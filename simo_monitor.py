@@ -172,6 +172,7 @@ def detalle(s, ins):
     try:
         filas = get_json(s, f"evaluacion/inscripcion/resultadospruebas/{idi}")
         estructura("resultadospruebas", filas)
+        out["_raw"] = filas if isinstance(filas, list) else []
         for p in filas if isinstance(filas, list) else []:
             out["pruebas"].append({
                 "nombre": nombre_prueba(p),
@@ -190,6 +191,12 @@ def detalle(s, ins):
             filas = [a for a in todos if isinstance(a, dict)] \
                 if isinstance(todos, list) else []
             mia = next((a for a in filas if str(a.get("id")) == str(idi)), None)
+            if os.environ.get("DEBUG"):
+                ids_p = {str(p.get("idInscripcion")) for p in
+                         out.get("_raw", [])}
+                print(f"  [debug] empleo usado={emp!r} idi={idi!r} "
+                      f"ids consolidados={[a.get('id') for a in filas][:8]} "
+                      f"idInscripcion en pruebas={ids_p}")
             print(f"  [estructura] mi fila en consolidados: {'sí' if mia else 'no'}"
                   f", trae puesto: {'sí' if mia and mia.get('puesto') else 'no'}")
             if mia:
@@ -205,6 +212,7 @@ def detalle(s, ins):
                         if (numero(a.get("calificacion")) or -1) > yo)
         except Exception as e:  # noqa: BLE001
             print(f"  no pude leer resultados consolidados: {e}")
+    out.pop("_raw", None)
     return out
 
 
@@ -273,6 +281,10 @@ def main():
         if FILTRO and FILTRO not in json.dumps(ins, ensure_ascii=False).lower():
             continue
         print(f"- Inscripción: {titulo}")
+        if os.environ.get("DEBUG"):
+            print("  [debug] campos inscripción:",
+                  {k: (sorted(v.keys()) if isinstance(v, dict) else type(v).__name__)
+                   for k, v in ins.items()})
         try:
             pruebas = get_json(s, f"evaluacion/inscripcion/{idi}")
         except Exception as e:  # noqa: BLE001
@@ -309,8 +321,8 @@ def main():
         if cambios and str(idi) in previas:
             nuevas.append((titulo, cambios, det_txt))
 
-    if MODO == "resumen":
-        # el resumen puede ir filtrado: no tocar lo que ya se había visto
+    if MODO == "resumen" or FILTRO:
+        # ejecución filtrada: no borrar del estado lo que ya se había visto
         actuales = {**previas, **actuales} if previas else actuales
     estado["inscripciones"] = actuales
     estado["ultima_revision"] = datetime.now(timezone.utc).isoformat()

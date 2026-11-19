@@ -13,6 +13,10 @@ on:
         description: "Solo inscripciones que contengan este texto (vacío = todas)"
         type: string
         default: "DIAN"
+      debug:
+        description: "Mostrar diagnóstico en el registro"
+        type: boolean
+        default: false
 
 concurrency:
   group: simo-monitor
@@ -46,7 +50,8 @@ jobs:
           NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
           INCLUIR_PUNTAJE: "1"
           FILTRO: ${{ github.event_name == 'workflow_dispatch' && inputs.filtro || '' }}
-          MODO: ${{ github.event_name == 'workflow_dispatch' && inputs.resumen && 'resumen' || '' }}
+          DEBUG: ${{ inputs.debug && '1' || '' }}
+          MODO:${{ github.event_name == 'workflow_dispatch' && inputs.resumen && 'resumen' || '' }}
         run: python simo_monitor.py
 
       - uses: actions/cache/save@v4
