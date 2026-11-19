@@ -127,12 +127,9 @@ def nombre_prueba(p):
 
 
 def resumen_inscripcion(ins):
-    partes = []
-    for k in ("convocatoria", "nombreConvocatoria", "empleo", "denominacion",
-              "codigoEmpleo", "numeroOpec", "opec"):
-        if ins.get(k):
-            partes.append(texto(ins[k]))
-    return " · ".join(p for p in partes if p)[:120] or f"Inscripción {ins.get('id')}"
+    partes = [texto(ins.get(k)) for k in
+              ("convocatoriaNombre", "denominacionNombre", "codigoEmpleo")]
+    return " · ".join(p for p in partes if p)[:150] or f"Inscripción {ins.get('id')}"
 
 
 def huella(obj):
@@ -186,32 +183,19 @@ def detalle(s, ins):
 
     if emp:
         try:
-            todos = get_json(s, f"evaluacion/inscripcion/resultadosconsolidados/{emp}")
-            estructura("resultadosconsolidados", todos)
-            filas = [a for a in todos if isinstance(a, dict)] \
-                if isinstance(todos, list) else []
-            mia = next((a for a in filas if str(a.get("id")) == str(idi)), None)
-            if os.environ.get("DEBUG"):
-                ids_p = {str(p.get("idInscripcion")) for p in
-                         out.get("_raw", [])}
-                print(f"  [debug] empleo usado={emp!r} idi={idi!r} "
-                      f"ids consolidados={[a.get('id') for a in filas][:8]} "
-                      f"idInscripcion en pruebas={ids_p}")
-            print(f"  [estructura] mi fila en consolidados: {'sí' if mia else 'no'}"
-                  f", trae puesto: {'sí' if mia and mia.get('puesto') else 'no'}")
-            if mia:
-                out["total"] = fmt(mia.get("calificacion"))
-                out["aspirantes"] = len(filas)
+            # igual que la pantalla "Resultados" de SIMO: mi registro consolidado
+            mia = get_json(s, f"evaluacion/inscripcion/resultadosconsolidados/{emp}/{idi}")
+            estructura("resultadoconsolidado", mia)
+            if isinstance(mia, dict) and mia:
+                if mia.get("calificacion") not in (None, ""):
+                    out["total"] = fmt(mia.get("calificacion"))
                 if mia.get("puesto"):
                     out["puesto"] = texto(mia["puesto"])
-                elif numero(mia.get("calificacion")) is not None:
-                    # SIMO no lo dio: lo calculo (empates comparten puesto)
-                    yo = numero(mia["calificacion"])
-                    out["puesto"] = 1 + sum(
-                        1 for a in filas
-                        if (numero(a.get("calificacion")) or -1) > yo)
+                out["estado"] = texto(mia.get("estado"))
         except Exception as e:  # noqa: BLE001
-            print(f"  no pude leer resultados consolidados: {e}")
+            print(f"  no pude leer resultado consolidado: {e}")
+    if ins.get("totalCiudadanosInscritos"):
+        out["aspirantes"] = ins["totalCiudadanosInscritos"]
     out.pop("_raw", None)
     return out
 
@@ -233,7 +217,10 @@ def texto_detalle(d):
     if d["total"] is not None:
         lineas.append(f"TOTAL: {d['total']}")
     if d["puesto"]:
-        lineas.append(f"PUESTO GENERAL: {d['puesto']} de {d['aspirantes']}")
+        de = f" de {d['aspirantes']}" if d.get("aspirantes") else ""
+        lineas.append(f"PUESTO GENERAL: {d['puesto']}{de}")
+    if d.get("estado"):
+        lineas.append(f"Estado: {d['estado']}")
     return "\n".join(lineas)
 
 
@@ -305,7 +292,7 @@ def main():
         det = detalle(s, ins)
         det_txt = texto_detalle(det)
         actuales[str(idi)] = {"titulo": titulo, "pruebas": mapa,
-                              "detalle": huella(det)}
+                              "detalle": huella(det), "v": 2}
         resumenes.append((titulo, det_txt))
 
         prev = previas.get(str(idi), {})
@@ -314,7 +301,7 @@ def main():
                    if antes.get(clave) is None
                    or antes[clave].get("resultado") != p["resultado"]
                    or antes[clave].get("fecha") != p["fecha"]]
-        if "detalle" in prev and prev["detalle"] != huella(det) and (det["pruebas"] or det["total"]):
+        if prev.get("v") == 2 and prev.get("detalle") != huella(det) and (det["pruebas"] or det["total"]):
             cambios.append({"nombre": "Puntajes actualizados", "resultado": "",
                             "fecha": ""})
         # una inscripción que no estaba en el estado se registra sin avisar
