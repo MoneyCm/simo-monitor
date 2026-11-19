@@ -56,6 +56,12 @@ def ntfy(titulo, mensaje, prioridad="default", tags=""):
     r = requests.post(f"{NTFY_SERVER}/{TOPIC}", data=mensaje.encode("utf-8"),
                       headers=headers, timeout=20)
     r.raise_for_status()
+    try:
+        info = r.json()
+        print(f"  [ntfy] enviado: HTTP {r.status_code}, id={info.get('id')}, "
+              f"prioridad={info.get('priority')}, título_ok={bool(info.get('title'))}")
+    except ValueError:
+        print(f"  [ntfy] enviado: HTTP {r.status_code}")
 
 
 def cargar_estado():
