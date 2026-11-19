@@ -9,6 +9,10 @@ on:
         description: "Enviar ya al celular el resumen de puntajes y puesto"
         type: boolean
         default: true
+      filtro:
+        description: "Solo inscripciones que contengan este texto (vacío = todas)"
+        type: string
+        default: "DIAN"
 
 concurrency:
   group: simo-monitor
@@ -41,7 +45,7 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
           INCLUIR_PUNTAJE: "1"
-          FILTRO: ""
+          FILTRO: ${{ github.event_name == 'workflow_dispatch' && inputs.filtro || '' }}
           MODO: ${{ github.event_name == 'workflow_dispatch' && inputs.resumen && 'resumen' || '' }}
         run: python simo_monitor.py
 

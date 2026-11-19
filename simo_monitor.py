@@ -72,10 +72,10 @@ def guardar_estado(estado):
 
 
 def get_json(s, path):
-    # SIMO usa dojo JsonRest: paginación con el header Range
-    r = s.get(BASE + path, timeout=40, headers={
-        "Accept": "application/json", "Range": "items=0-99",
-        "X-Requested-With": "XMLHttpRequest"})
+    # SIMO pagina con ?page=N&size=M (por defecto devuelve solo 20 filas)
+    r = s.get(BASE + path, timeout=60, params={"page": 0, "size": 5000},
+              headers={"Accept": "application/json",
+                       "X-Requested-With": "XMLHttpRequest"})
     r.raise_for_status()
     return r.json()
 
@@ -176,6 +176,7 @@ def detalle(s, ins):
             out["pruebas"].append({
                 "nombre": nombre_prueba(p),
                 "calificacion": fmt(p.get("calificacion")),
+                "puesto": texto(p.get("puesto")),
                 "aprobatorio": fmt(p.get("valorAprobatorio")),
                 "ponderacion": fmt(p.get("ponderacion")),
             })
@@ -186,16 +187,22 @@ def detalle(s, ins):
         try:
             todos = get_json(s, f"evaluacion/inscripcion/resultadosconsolidados/{emp}")
             estructura("resultadosconsolidados", todos)
-            notas = [(str(a.get("id")), numero(a.get("calificacion")))
-                     for a in todos if isinstance(a, dict)] \
+            filas = [a for a in todos if isinstance(a, dict)] \
                 if isinstance(todos, list) else []
-            notas = [(i, n) for i, n in notas if n is not None]
-            mia = next((n for i, n in notas if i == str(idi)), None)
-            if mia is not None:
-                out["total"] = fmt(mia)
-                # empates comparten puesto
-                out["puesto"] = 1 + sum(1 for _, n in notas if n > mia)
-                out["aspirantes"] = len(notas)
+            mia = next((a for a in filas if str(a.get("id")) == str(idi)), None)
+            print(f"  [estructura] mi fila en consolidados: {'sí' if mia else 'no'}"
+                  f", trae puesto: {'sí' if mia and mia.get('puesto') else 'no'}")
+            if mia:
+                out["total"] = fmt(mia.get("calificacion"))
+                out["aspirantes"] = len(filas)
+                if mia.get("puesto"):
+                    out["puesto"] = texto(mia["puesto"])
+                elif numero(mia.get("calificacion")) is not None:
+                    # SIMO no lo dio: lo calculo (empates comparten puesto)
+                    yo = numero(mia["calificacion"])
+                    out["puesto"] = 1 + sum(
+                        1 for a in filas
+                        if (numero(a.get("calificacion")) or -1) > yo)
         except Exception as e:  # noqa: BLE001
             print(f"  no pude leer resultados consolidados: {e}")
     return out
@@ -206,6 +213,8 @@ def texto_detalle(d):
     for p in d["pruebas"]:
         l = f"• {p['nombre']}: {p['calificacion'] or 'sin publicar'}"
         extra = []
+        if p.get("puesto"):
+            extra.append(f"puesto {p['puesto']}")
         if p["aprobatorio"]:
             extra.append(f"aprueba con {p['aprobatorio']}")
         if p["ponderacion"]:
@@ -216,7 +225,7 @@ def texto_detalle(d):
     if d["total"] is not None:
         lineas.append(f"TOTAL: {d['total']}")
     if d["puesto"]:
-        lineas.append(f"PUESTO: {d['puesto']} de {d['aspirantes']} aspirantes")
+        lineas.append(f"PUESTO GENERAL: {d['puesto']} de {d['aspirantes']}")
     return "\n".join(lineas)
 
 
@@ -263,6 +272,7 @@ def main():
         titulo = resumen_inscripcion(ins)
         if FILTRO and FILTRO not in json.dumps(ins, ensure_ascii=False).lower():
             continue
+        print(f"- Inscripción: {titulo}")
         try:
             pruebas = get_json(s, f"evaluacion/inscripcion/{idi}")
         except Exception as e:  # noqa: BLE001
@@ -295,9 +305,13 @@ def main():
         if "detalle" in prev and prev["detalle"] != huella(det) and (det["pruebas"] or det["total"]):
             cambios.append({"nombre": "Puntajes actualizados", "resultado": "",
                             "fecha": ""})
-        if cambios:
+        # una inscripción que no estaba en el estado se registra sin avisar
+        if cambios and str(idi) in previas:
             nuevas.append((titulo, cambios, det_txt))
 
+    if MODO == "resumen":
+        # el resumen puede ir filtrado: no tocar lo que ya se había visto
+        actuales = {**previas, **actuales} if previas else actuales
     estado["inscripciones"] = actuales
     estado["ultima_revision"] = datetime.now(timezone.utc).isoformat()
     guardar_estado(estado)
@@ -310,12 +324,13 @@ def main():
             print(f"  cambio en: {t} -> {p['nombre']} ({p['fecha']})")
 
     if MODO == "resumen":
-        cuerpo = "\n\n".join(f"{t}\n{d or 'Aún no hay puntajes publicados.'}"
-                             if INCLUIR_PUNTAJE else
-                             f"{t}\n(activa INCLUIR_PUNTAJE para ver puntajes)"
-                             for t, d in resumenes)
-        ntfy("📊 Resumen SIMO", cuerpo or "No encontré inscripciones.",
-             "default", "bar_chart")
+        # un mensaje por inscripción (ntfy corta los mensajes muy largos)
+        if not resumenes:
+            ntfy("📊 Resumen SIMO", "No encontré inscripciones con ese filtro.")
+        for t, d in resumenes:
+            cuerpo = (d or "Aún no hay puntajes publicados.") if INCLUIR_PUNTAJE \
+                else "(activa INCLUIR_PUNTAJE para ver puntajes)"
+            ntfy(f"📊 {t}"[:200], cuerpo, "default", "bar_chart")
         return
 
     if primera_vez:
