@@ -51,7 +51,7 @@ jobs:
           INCLUIR_PUNTAJE: "1"
           FILTRO: ${{ github.event_name == 'workflow_dispatch' && inputs.filtro || '' }}
           DEBUG: ${{ inputs.debug && '1' || '' }}
-          MODO:${{ github.event_name == 'workflow_dispatch' && inputs.resumen && 'resumen' || '' }}
+          MODO: ${{ github.event_name == 'workflow_dispatch' && inputs.resumen && 'resumen' || '' }}
         run: python simo_monitor.py
 
       - uses: actions/cache/save@v4
