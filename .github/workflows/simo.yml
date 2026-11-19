@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "*/30 * * * *"   # cada 30 minutos (GitHub a veces se retrasa unos minutos)
   workflow_dispatch:          # botón "Run workflow" para probar a mano
+    inputs:
+      resumen:
+        description: "Enviar ya al celular el resumen de puntajes y puesto"
+        type: boolean
+        default: true
 
 concurrency:
   group: simo-monitor
@@ -35,8 +40,9 @@ jobs:
           SIMO_PASS: ${{ secrets.SIMO_PASS }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
-          INCLUIR_PUNTAJE: "0"
+          INCLUIR_PUNTAJE: "1"
           FILTRO: ""
+          MODO: ${{ github.event_name == 'workflow_dispatch' && inputs.resumen && 'resumen' || '' }}
         run: python simo_monitor.py
 
       - uses: actions/cache/save@v4

@@ -40,6 +40,7 @@ NTFY_TOKEN = os.environ.get("NTFY_TOKEN", "").strip()
 INCLUIR_PUNTAJE = os.environ.get("INCLUIR_PUNTAJE", "") == "1"
 FILTRO = os.environ.get("FILTRO", "").strip().lower()
 STATE_FILE = os.environ.get("STATE_FILE", "estado_simo.json")
+MODO = os.environ.get("MODO", "").strip().lower()  # "resumen" = enviar resumen ya
 
 
 def ntfy(titulo, mensaje, prioridad="default", tags=""):
@@ -139,6 +140,86 @@ def huella(obj):
                           .encode("utf-8")).hexdigest()
 
 
+def numero(v):
+    try:
+        return float(str(v).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+
+
+def fmt(v):
+    n = numero(v)
+    return texto(v) if n is None else f"{n:.2f}".rstrip("0").rstrip(".")
+
+
+def estructura(nombre, data):
+    """Imprime en el log solo los NOMBRES de los campos (sin valores), para
+    poder ajustar el script si SIMO cambia algo."""
+    fila = data[0] if isinstance(data, list) and data else data
+    claves = sorted(fila.keys()) if isinstance(fila, dict) else type(fila).__name__
+    n = len(data) if isinstance(data, list) else 1
+    print(f"  [estructura] {nombre}: {n} filas, campos={claves}")
+
+
+def detalle(s, ins):
+    """Puntaje por prueba + total y puesto entre los aspirantes del empleo."""
+    idi = ins.get("id")
+    emp = ins.get("empleoId")
+    if not emp and isinstance(ins.get("empleo"), dict):
+        emp = ins["empleo"].get("id")
+    out = {"pruebas": [], "total": None, "puesto": None, "aspirantes": None}
+
+    try:
+        filas = get_json(s, f"evaluacion/inscripcion/resultadospruebas/{idi}")
+        estructura("resultadospruebas", filas)
+        for p in filas if isinstance(filas, list) else []:
+            out["pruebas"].append({
+                "nombre": nombre_prueba(p),
+                "calificacion": fmt(p.get("calificacion")),
+                "aprobatorio": fmt(p.get("valorAprobatorio")),
+                "ponderacion": fmt(p.get("ponderacion")),
+            })
+    except Exception as e:  # noqa: BLE001
+        print(f"  no pude leer resultados por prueba: {e}")
+
+    if emp:
+        try:
+            todos = get_json(s, f"evaluacion/inscripcion/resultadosconsolidados/{emp}")
+            estructura("resultadosconsolidados", todos)
+            notas = [(str(a.get("id")), numero(a.get("calificacion")))
+                     for a in todos if isinstance(a, dict)] \
+                if isinstance(todos, list) else []
+            notas = [(i, n) for i, n in notas if n is not None]
+            mia = next((n for i, n in notas if i == str(idi)), None)
+            if mia is not None:
+                out["total"] = fmt(mia)
+                # empates comparten puesto
+                out["puesto"] = 1 + sum(1 for _, n in notas if n > mia)
+                out["aspirantes"] = len(notas)
+        except Exception as e:  # noqa: BLE001
+            print(f"  no pude leer resultados consolidados: {e}")
+    return out
+
+
+def texto_detalle(d):
+    lineas = []
+    for p in d["pruebas"]:
+        l = f"• {p['nombre']}: {p['calificacion'] or 'sin publicar'}"
+        extra = []
+        if p["aprobatorio"]:
+            extra.append(f"aprueba con {p['aprobatorio']}")
+        if p["ponderacion"]:
+            extra.append(f"peso {p['ponderacion']}%")
+        if extra:
+            l += f" ({', '.join(extra)})"
+        lineas.append(l)
+    if d["total"] is not None:
+        lineas.append(f"TOTAL: {d['total']}")
+    if d["puesto"]:
+        lineas.append(f"PUESTO: {d['puesto']} de {d['aspirantes']} aspirantes")
+    return "\n".join(lineas)
+
+
 def main():
     if not USER or not PASS:
         sys.exit("Faltan SIMO_USER / SIMO_PASS")
@@ -171,6 +252,7 @@ def main():
     estado["error"] = None
 
     nuevas = []
+    resumenes = []
     previas = estado.get("inscripciones", {})
     actuales = {}
 
@@ -198,14 +280,23 @@ def main():
                 "fecha": texto(p.get("fechaPublicacion")),
                 "huella": huella(p),
             }
-        actuales[str(idi)] = {"titulo": titulo, "pruebas": mapa}
+        det = detalle(s, ins)
+        det_txt = texto_detalle(det)
+        actuales[str(idi)] = {"titulo": titulo, "pruebas": mapa,
+                              "detalle": huella(det)}
+        resumenes.append((titulo, det_txt))
 
-        antes = previas.get(str(idi), {}).get("pruebas", {})
-        for clave, p in mapa.items():
-            a = antes.get(clave)
-            if a is None or a.get("resultado") != p["resultado"] \
-                    or a.get("fecha") != p["fecha"]:
-                nuevas.append((titulo, p))
+        prev = previas.get(str(idi), {})
+        antes = prev.get("pruebas", {})
+        cambios = [p for clave, p in mapa.items()
+                   if antes.get(clave) is None
+                   or antes[clave].get("resultado") != p["resultado"]
+                   or antes[clave].get("fecha") != p["fecha"]]
+        if "detalle" in prev and prev["detalle"] != huella(det) and (det["pruebas"] or det["total"]):
+            cambios.append({"nombre": "Puntajes actualizados", "resultado": "",
+                            "fecha": ""})
+        if cambios:
+            nuevas.append((titulo, cambios, det_txt))
 
     estado["inscripciones"] = actuales
     estado["ultima_revision"] = datetime.now(timezone.utc).isoformat()
@@ -214,8 +305,18 @@ def main():
     total = sum(len(v["pruebas"]) for v in actuales.values())
     print(f"OK: {len(actuales)} inscripciones, {total} pruebas registradas, "
           f"{len(nuevas)} cambios.")
-    for t, p in nuevas:
-        print(f"  cambio en: {t} -> {p['nombre']} ({p['fecha']})")
+    for t, cambios, _ in nuevas:
+        for p in cambios:
+            print(f"  cambio en: {t} -> {p['nombre']} ({p['fecha']})")
+
+    if MODO == "resumen":
+        cuerpo = "\n\n".join(f"{t}\n{d or 'Aún no hay puntajes publicados.'}"
+                             if INCLUIR_PUNTAJE else
+                             f"{t}\n(activa INCLUIR_PUNTAJE para ver puntajes)"
+                             for t, d in resumenes)
+        ntfy("📊 Resumen SIMO", cuerpo or "No encontré inscripciones.",
+             "default", "bar_chart")
+        return
 
     if primera_vez:
         lineas = [f"• {v['titulo']}: {len(v['pruebas'])} pruebas publicadas"
@@ -225,12 +326,14 @@ def main():
              + "\n".join(lineas), "low", "eyes")
         return
 
-    for titulo, p in nuevas:
-        msg = f"{p['nombre']}\n{titulo}"
-        if p["fecha"]:
-            msg += f"\nPublicado: {p['fecha']}"
-        if INCLUIR_PUNTAJE and p["resultado"]:
-            msg += f"\nResultado: {p['resultado']}"
+    for titulo, cambios, det_txt in nuevas:
+        msg = titulo
+        for p in cambios:
+            msg += f"\n➡ {p['nombre']}"
+            if p["fecha"]:
+                msg += f" (publicado {p['fecha']})"
+        if INCLUIR_PUNTAJE and det_txt:
+            msg += "\n\n" + det_txt
         ntfy("🚨 ¡Nuevo resultado en SIMO!", msg, "urgent", "rotating_light,tada")
 
 
