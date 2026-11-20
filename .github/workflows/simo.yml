@@ -19,6 +19,10 @@ on:
         description: "Enviar una alerta urgente de prueba (push + correo)"
         type: boolean
         default: false
+      ciclo:
+        description: "Iniciar ya el ciclo de revisión cada 5 minutos (~5h40m)"
+        type: boolean
+        default: false
       debug:
         description: "Mostrar diagnóstico en el registro"
         type: boolean
@@ -26,7 +30,7 @@ on:
 
 concurrency:
   # solo un ciclo a la vez; las ejecuciones manuales no hacen fila detrás
-  group: ${{ github.event_name == 'schedule' && 'simo-ciclo' || github.run_id }}
+  group: ${{ (github.event_name == 'schedule' || inputs.ciclo) && 'simo-ciclo' || github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -61,7 +65,7 @@ jobs:
           FILTRO: ${{ inputs.filtro || '2676' }}
           DEBUG: ${{ inputs.debug && '1' || '' }}
           MODO: ${{ inputs.prueba && 'prueba' || (inputs.resumen && 'resumen') || '' }}
-          LOOP_MINUTES: ${{ github.event_name == 'schedule' && '340' || '0' }}
+          LOOP_MINUTES: ${{ (github.event_name == 'schedule' || inputs.ciclo) && '340' || '0' }}
           INTERVALO: "300"
         run: python simo_monitor.py
 
