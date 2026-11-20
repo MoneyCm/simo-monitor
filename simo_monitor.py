@@ -14,6 +14,8 @@ Variables de entorno (en GitHub van como Secrets):
   INCLUIR_PUNTAJE  opcional, "1" para incluir el puntaje en la notificación
   FILTRO           opcional, texto para vigilar solo ciertas inscripciones (ej. "DIAN")
   STATE_FILE       opcional, por defecto estado_simo.json
+  NTFY_EMAIL       opcional, correo al que ntfy reenvía las alertas urgentes
+  MODO             "resumen" (enviar resumen ya) o "prueba" (alerta urgente de prueba)
 """
 import hashlib
 import json
@@ -40,10 +42,11 @@ NTFY_TOKEN = os.environ.get("NTFY_TOKEN", "").strip()
 INCLUIR_PUNTAJE = os.environ.get("INCLUIR_PUNTAJE", "") == "1"
 FILTRO = os.environ.get("FILTRO", "").strip().lower()
 STATE_FILE = os.environ.get("STATE_FILE", "estado_simo.json")
-MODO = os.environ.get("MODO", "").strip().lower()  # "resumen" = enviar resumen ya
+MODO = os.environ.get("MODO", "").strip().lower()
+EMAIL = os.environ.get("NTFY_EMAIL", "").strip()
 
 
-def ntfy(titulo, mensaje, prioridad="default", tags=""):
+def ntfy(titulo, mensaje, prioridad="default", tags="", correo=False):
     if not TOPIC:
         print(f"[ntfy desactivado] {titulo}: {mensaje}")
         return
@@ -53,8 +56,19 @@ def ntfy(titulo, mensaje, prioridad="default", tags=""):
     if NTFY_TOKEN:
         headers["Authorization"] = f"Bearer {NTFY_TOKEN}"
     headers["Click"] = BASE
+    if correo and EMAIL:
+        headers["Email"] = EMAIL  # ntfy reenvía la notificación a este correo
     r = requests.post(f"{NTFY_SERVER}/{TOPIC}", data=mensaje.encode("utf-8"),
                       headers=headers, timeout=20)
+    if not r.ok and "Email" in headers:
+        # si falla el correo (p. ej. límite diario de ntfy), que al menos llegue el push
+        print(f"  [ntfy] el correo falló (HTTP {r.status_code}: {r.text[:150]}); "
+              "reintento solo con push")
+        headers.pop("Email")
+        r = requests.post(f"{NTFY_SERVER}/{TOPIC}", data=mensaje.encode("utf-8"),
+                          headers=headers, timeout=20)
+    elif "Email" in headers:
+        print("  [ntfy] también enviado por correo")
     r.raise_for_status()
     try:
         info = r.json()
@@ -231,6 +245,11 @@ def texto_detalle(d):
 
 
 def main():
+    if MODO == "prueba":
+        ntfy("🚨 Prueba de alerta SIMO",
+             "Así se verá el aviso cuando salga un resultado.", "urgent",
+             "rotating_light", correo=True)
+        return
     if not USER or not PASS:
         sys.exit("Faltan SIMO_USER / SIMO_PASS")
 
@@ -354,7 +373,8 @@ def main():
                 msg += f" (publicado {p['fecha']})"
         if INCLUIR_PUNTAJE and det_txt:
             msg += "\n\n" + det_txt
-        ntfy("🚨 ¡Nuevo resultado en SIMO!", msg, "urgent", "rotating_light,tada")
+        ntfy("🚨 ¡Nuevo resultado en SIMO!", msg, "urgent", "rotating_light,tada",
+             correo=True)
 
 
 if __name__ == "__main__":

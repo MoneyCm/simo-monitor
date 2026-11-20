@@ -13,6 +13,10 @@ on:
         description: "Solo inscripciones que contengan este texto"
         type: string
         default: "2676"
+      prueba:
+        description: "Enviar una alerta urgente de prueba (push + correo)"
+        type: boolean
+        default: false
       debug:
         description: "Mostrar diagnóstico en el registro"
         type: boolean
@@ -48,14 +52,15 @@ jobs:
           SIMO_PASS: ${{ secrets.SIMO_PASS }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+          NTFY_EMAIL: ${{ secrets.NTFY_EMAIL }}
           INCLUIR_PUNTAJE: "1"
           FILTRO: ${{ inputs.filtro || '2676' }}
           DEBUG: ${{ inputs.debug && '1' || '' }}
-          MODO: ${{ github.event_name == 'workflow_dispatch' && inputs.resumen && 'resumen' || '' }}
+          MODO: ${{ inputs.prueba && 'prueba' || (inputs.resumen && 'resumen') || '' }}
         run: python simo_monitor.py
 
       - uses: actions/cache/save@v4
-        if: always()
+        if: always() && hashFiles('estado_simo.json') != ''
         with:
           path: estado_simo.json
           key: estado-simo-${{ github.run_id }}
