@@ -14,7 +14,8 @@ Variables de entorno (en GitHub van como Secrets):
   INCLUIR_PUNTAJE  opcional, "1" para incluir el puntaje en la notificación
   FILTRO           opcional, texto para vigilar solo ciertas inscripciones (ej. "DIAN")
   STATE_FILE       opcional, por defecto estado_simo.json
-  NTFY_EMAIL       opcional, correo al que ntfy reenvía las alertas urgentes
+  NTFY_EMAIL       opcional, tu Gmail para recibir también las alertas urgentes
+  GMAIL_APP_PASSWORD  contraseña de aplicación de ese Gmail (para enviar el correo)
   MODO             "resumen" (enviar resumen ya) o "prueba" (alerta urgente de prueba)
 """
 import hashlib
@@ -46,6 +47,25 @@ FILTRO = os.environ.get("FILTRO", "").strip().lower()
 STATE_FILE = os.environ.get("STATE_FILE", "estado_simo.json")
 MODO = os.environ.get("MODO", "").strip().lower()
 EMAIL = os.environ.get("NTFY_EMAIL", "").strip()
+GMAIL_PASS = os.environ.get("GMAIL_APP_PASSWORD", "").replace(" ", "")
+
+
+def enviar_correo(titulo, mensaje):
+    """Envía el aviso desde tu Gmail a tu mismo Gmail (contraseña de aplicación)."""
+    import smtplib
+    from email.message import EmailMessage
+    m = EmailMessage()
+    m["Subject"] = titulo
+    m["From"] = EMAIL
+    m["To"] = EMAIL
+    m.set_content(f"{mensaje}\n\nSIMO: {BASE}")
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as smtp:
+            smtp.login(EMAIL, GMAIL_PASS)
+            smtp.send_message(m)
+        print("  [correo] enviado")
+    except Exception as e:  # noqa: BLE001
+        print("  [correo] falló:", type(e).__name__, str(e)[:120].replace(EMAIL, "<correo>"))
 
 
 def ntfy(titulo, mensaje, prioridad="default", tags="", correo=False):
@@ -58,8 +78,10 @@ def ntfy(titulo, mensaje, prioridad="default", tags="", correo=False):
     if NTFY_TOKEN:
         headers["Authorization"] = f"Bearer {NTFY_TOKEN}"
     headers["Click"] = BASE
-    if correo and EMAIL:
-        headers["Email"] = EMAIL  # ntfy reenvía la notificación a este correo
+    if correo and EMAIL and GMAIL_PASS:
+        enviar_correo(titulo, mensaje)
+    elif correo and EMAIL and NTFY_TOKEN:
+        headers["Email"] = EMAIL  # con cuenta de ntfy, ntfy reenvía el correo
     r = requests.post(f"{NTFY_SERVER}/{TOPIC}", data=mensaje.encode("utf-8"),
                       headers=headers, timeout=20)
     if not r.ok and "Email" in headers:

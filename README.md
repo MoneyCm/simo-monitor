@@ -24,7 +24,8 @@ En *Settings → Secrets and variables → Actions*:
 | `SIMO_USER` | usuario de SIMO |
 | `SIMO_PASS` | contraseña de SIMO |
 | `NTFY_TOPIC` | tema de ntfy del celular |
-| `NTFY_EMAIL` | *(opcional)* correo para recibir también las alertas urgentes |
+| `NTFY_EMAIL` | *(opcional)* tu Gmail para recibir también las alertas urgentes |
+| `GMAIL_APP_PASSWORD` | *(opcional)* contraseña de aplicación de ese Gmail ([crearla aquí](https://myaccount.google.com/apppasswords)) |
 
 ## Cómo funciona la frecuencia
 
