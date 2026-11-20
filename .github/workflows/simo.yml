@@ -67,6 +67,7 @@ jobs:
           MODO: ${{ inputs.prueba && 'prueba' || (inputs.resumen && 'resumen') || '' }}
           LOOP_MINUTES: ${{ (github.event_name == 'schedule' || inputs.ciclo) && '340' || '0' }}
           INTERVALO: "300"
+          PYTHONUNBUFFERED: "1"   # registro en vivo mientras corre el ciclo
         run: python simo_monitor.py
 
       - uses: actions/cache/save@v4
