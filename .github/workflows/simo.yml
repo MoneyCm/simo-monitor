@@ -75,3 +75,15 @@ jobs:
         with:
           path: estado_simo.json
           key: estado-simo-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # Si el trabajo de GitHub falla (no solo SIMO), avisar al celular
+      - name: Avisar si falló
+        if: failure()
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          curl -s -o /dev/null -H "Title: Monitor SIMO: fallo en GitHub" \
+            -H "Priority: high" -H "Tags: warning" -H "Click: $URL" \
+            -d "El trabajo de revision fallo. Abre la notificacion para ver el detalle." \
+            "https://ntfy.sh/$NTFY_TOPIC"
