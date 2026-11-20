@@ -2,7 +2,9 @@ name: Monitor SIMO
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # cada 30 minutos (GitHub a veces se retrasa unos minutos)
+    # Cada hora se programa un trabajo que revisa SIMO cada 5 minutos durante
+    # ~5h40m. Si GitHub se retrasa, el trabajo que ya corre cubre el hueco.
+    - cron: "17 * * * *"
   workflow_dispatch:          # botón "Run workflow" para probar a mano
     inputs:
       resumen:
@@ -23,13 +25,14 @@ on:
         default: false
 
 concurrency:
-  group: simo-monitor
+  # solo un ciclo a la vez; las ejecuciones manuales no hacen fila detrás
+  group: ${{ github.event_name == 'schedule' && 'simo-ciclo' || github.run_id }}
   cancel-in-progress: false
 
 jobs:
   revisar:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
 
@@ -43,7 +46,7 @@ jobs:
       - uses: actions/cache/restore@v4
         with:
           path: estado_simo.json
-          key: estado-simo-${{ github.run_id }}
+          key: estado-simo-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: estado-simo-
 
       - name: Revisar SIMO
@@ -57,10 +60,12 @@ jobs:
           FILTRO: ${{ inputs.filtro || '2676' }}
           DEBUG: ${{ inputs.debug && '1' || '' }}
           MODO: ${{ inputs.prueba && 'prueba' || (inputs.resumen && 'resumen') || '' }}
+          LOOP_MINUTES: ${{ github.event_name == 'schedule' && '340' || '0' }}
+          INTERVALO: "300"
         run: python simo_monitor.py
 
       - uses: actions/cache/save@v4
         if: always() && hashFiles('estado_simo.json') != ''
         with:
           path: estado_simo.json
-          key: estado-simo-${{ github.run_id }}
+          key: estado-simo-${{ github.run_id }}-${{ github.run_attempt }}

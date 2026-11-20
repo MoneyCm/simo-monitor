@@ -18,9 +18,11 @@ Variables de entorno (en GitHub van como Secrets):
   MODO             "resumen" (enviar resumen ya) o "prueba" (alerta urgente de prueba)
 """
 import hashlib
+import hmac
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 
 import requests
@@ -48,7 +50,7 @@ EMAIL = os.environ.get("NTFY_EMAIL", "").strip()
 
 def ntfy(titulo, mensaje, prioridad="default", tags="", correo=False):
     if not TOPIC:
-        print(f"[ntfy desactivado] {titulo}: {mensaje}")
+        print("[ntfy desactivado: falta NTFY_TOPIC]")
         return
     headers = {"Title": titulo.encode("utf-8"), "Priority": prioridad}
     if tags:
@@ -172,6 +174,8 @@ def fmt(v):
 def estructura(nombre, data):
     """Imprime en el log solo los NOMBRES de los campos (sin valores), para
     poder ajustar el script si SIMO cambia algo."""
+    if not os.environ.get("DEBUG"):
+        return
     fila = data[0] if isinstance(data, list) and data else data
     claves = sorted(fila.keys()) if isinstance(fila, dict) else type(fila).__name__
     n = len(data) if isinstance(data, list) else 1
@@ -199,7 +203,7 @@ def detalle(s, ins):
                 "ponderacion": fmt(p.get("ponderacion")),
             })
     except Exception as e:  # noqa: BLE001
-        print(f"  no pude leer resultados por prueba: {e}")
+        print("  no pude leer resultados por prueba:", type(e).__name__)
 
     if emp:
         try:
@@ -213,7 +217,7 @@ def detalle(s, ins):
                     out["puesto"] = texto(mia["puesto"])
                 out["estado"] = texto(mia.get("estado"))
         except Exception as e:  # noqa: BLE001
-            print(f"  no pude leer resultado consolidado: {e}")
+            print("  no pude leer resultado consolidado:", type(e).__name__)
     if ins.get("totalCiudadanosInscritos"):
         out["aspirantes"] = ins["totalCiudadanosInscritos"]
     out.pop("_raw", None)
@@ -244,12 +248,15 @@ def texto_detalle(d):
     return "\n".join(lineas)
 
 
-def main():
-    if MODO == "prueba":
-        ntfy("🚨 Prueba de alerta SIMO",
-             "Así se verá el aviso cuando salga un resultado.", "urgent",
-             "rotating_light", correo=True)
-        return
+def secreto(v):
+    """Huella con clave (HMAC) de un dato: el estado guardado no revela
+    puntajes ni nombres aunque alguien lo viera, y no se puede adivinar
+    probando valores sin conocer tu contraseña."""
+    clave = (USER + "|" + PASS).encode("utf-8")
+    return hmac.new(clave, str(v).encode("utf-8"), hashlib.sha256).hexdigest()[:20]
+
+
+def revisar():
     if not USER or not PASS:
         sys.exit("Faltan SIMO_USER / SIMO_PASS")
 
@@ -266,12 +273,12 @@ def main():
             raise RuntimeError("SIMO no devolvió la lista de inscripciones "
                                "(¿login fallido?)")
     except Exception as e:  # noqa: BLE001
-        print("ERROR:", e)
+        print("ERROR al entrar a SIMO:", type(e).__name__)
         # avisa solo la primera vez que falla, no en cada ejecución
         if not estado.get("error"):
             ntfy("Monitor SIMO: error", f"No pude revisar SIMO: {e}",
                  "low", "warning")
-        estado["error"] = str(e)
+        estado["error"] = True
         guardar_estado(estado)
         sys.exit(1)
 
@@ -280,8 +287,9 @@ def main():
              "low", "white_check_mark")
     estado["error"] = None
 
-    nuevas = []
+    nuevas = []       # (titulo, cambios, detalle) -> solo en memoria
     resumenes = []
+    conteo = []
     previas = estado.get("inscripciones", {})
     actuales = {}
 
@@ -289,10 +297,10 @@ def main():
         idi = ins.get("id")
         if idi is None:
             continue
-        titulo = resumen_inscripcion(ins)
         if FILTRO and FILTRO not in json.dumps(ins, ensure_ascii=False).lower():
             continue
-        print(f"- Inscripción: {titulo}")
+        titulo = resumen_inscripcion(ins)
+        k_ins = secreto(f"ins:{idi}")
         if os.environ.get("DEBUG"):
             print("  [debug] campos inscripción:",
                   {k: (sorted(v.keys()) if isinstance(v, dict) else type(v).__name__)
@@ -300,52 +308,48 @@ def main():
         try:
             pruebas = get_json(s, f"evaluacion/inscripcion/{idi}")
         except Exception as e:  # noqa: BLE001
-            print(f"No pude leer resultados de {idi}: {e}")
-            pruebas = previas.get(str(idi), {}).get("pruebas", {})
-            actuales[str(idi)] = {"titulo": titulo, "pruebas": pruebas}
+            print("  no pude leer la tabla de resultados:", type(e).__name__)
+            if k_ins in previas:
+                actuales[k_ins] = previas[k_ins]
             continue
 
-        mapa = {}
+        mapa, nombres = {}, {}
         for p in pruebas if isinstance(pruebas, list) else []:
-            clave = str(p.get("id") or p.get("idEvaluaPrueba") or nombre_prueba(p))
-            mapa[clave] = {
-                "nombre": nombre_prueba(p),
-                "resultado": texto(p.get("resultado")),
-                "fecha": texto(p.get("fechaPublicacion")),
-                "huella": huella(p),
-            }
+            clave = secreto(str(p.get("id") or p.get("idEvaluaPrueba")
+                                or nombre_prueba(p)))
+            fecha = texto(p.get("fechaPublicacion"))
+            mapa[clave] = {"r": secreto(texto(p.get("resultado"))),
+                           "f": secreto(fecha)}
+            nombres[clave] = (nombre_prueba(p), fecha)
         det = detalle(s, ins)
         det_txt = texto_detalle(det)
-        actuales[str(idi)] = {"titulo": titulo, "pruebas": mapa,
-                              "detalle": huella(det), "v": 2}
+        actuales[k_ins] = {"pruebas": mapa, "detalle": secreto(huella(det)),
+                           "v": 3}
         resumenes.append((titulo, det_txt))
+        conteo.append((titulo, len(mapa)))
+        print(f"- Inscripción revisada: {len(mapa)} pruebas publicadas")
 
-        prev = previas.get(str(idi), {})
+        prev = previas.get(k_ins, {})
+        if prev.get("v") != 3:
+            continue  # inscripción nueva o estado antiguo: se registra sin avisar
         antes = prev.get("pruebas", {})
-        cambios = [p for clave, p in mapa.items()
-                   if antes.get(clave) is None
-                   or antes[clave].get("resultado") != p["resultado"]
-                   or antes[clave].get("fecha") != p["fecha"]]
-        if prev.get("v") == 2 and prev.get("detalle") != huella(det) and (det["pruebas"] or det["total"]):
-            cambios.append({"nombre": "Puntajes actualizados", "resultado": "",
-                            "fecha": ""})
-        # una inscripción que no estaba en el estado se registra sin avisar
-        if cambios and str(idi) in previas:
+        cambios = [{"nombre": nombres[c][0], "fecha": nombres[c][1]}
+                   for c, v in mapa.items() if antes.get(c) != v]
+        if prev.get("detalle") != actuales[k_ins]["detalle"] \
+                and (det["pruebas"] or det["total"]):
+            cambios.append({"nombre": "Puntajes actualizados", "fecha": ""})
+        if cambios:
             nuevas.append((titulo, cambios, det_txt))
 
     if MODO == "resumen" or FILTRO:
         # ejecución filtrada: no borrar del estado lo que ya se había visto
-        actuales = {**previas, **actuales} if previas else actuales
+        actuales = {**previas, **actuales}
     estado["inscripciones"] = actuales
     estado["ultima_revision"] = datetime.now(timezone.utc).isoformat()
     guardar_estado(estado)
 
-    total = sum(len(v["pruebas"]) for v in actuales.values())
-    print(f"OK: {len(actuales)} inscripciones, {total} pruebas registradas, "
-          f"{len(nuevas)} cambios.")
-    for t, cambios, _ in nuevas:
-        for p in cambios:
-            print(f"  cambio en: {t} -> {p['nombre']} ({p['fecha']})")
+    print(f"OK {datetime.now(timezone.utc):%H:%M} UTC: {len(conteo)} inscripciones "
+          f"revisadas, {len(nuevas)} con cambios.")
 
     if MODO == "resumen":
         # un mensaje por inscripción (ntfy corta los mensajes muy largos)
@@ -358,8 +362,7 @@ def main():
         return
 
     if primera_vez:
-        lineas = [f"• {v['titulo']}: {len(v['pruebas'])} pruebas publicadas"
-                  for v in actuales.values()]
+        lineas = [f"• {t}: {n} pruebas publicadas" for t, n in conteo]
         ntfy("Monitor SIMO activo ✅",
              "Entré a SIMO correctamente. Te aviso cuando haya resultados nuevos.\n"
              + "\n".join(lineas), "low", "eyes")
@@ -375,6 +378,35 @@ def main():
             msg += "\n\n" + det_txt
         ntfy("🚨 ¡Nuevo resultado en SIMO!", msg, "urgent", "rotating_light,tada",
              correo=True)
+
+
+def main():
+    if MODO == "prueba":
+        ntfy("🚨 Prueba de alerta SIMO",
+             "Así se verá el aviso cuando salga un resultado.", "urgent",
+             "rotating_light", correo=True)
+        return
+
+    minutos = float(os.environ.get("LOOP_MINUTES") or 0)
+    intervalo = int(os.environ.get("INTERVALO") or 300)
+    if MODO == "resumen" or minutos <= 0:
+        revisar()
+        return
+
+    # modo ciclo: revisa cada `intervalo` segundos durante `minutos`
+    fin = time.time() + minutos * 60
+    while True:
+        inicio = time.time()
+        try:
+            revisar()
+        except SystemExit:
+            pass
+        except Exception as e:  # noqa: BLE001
+            print("ERROR inesperado:", type(e).__name__)
+        espera = intervalo - (time.time() - inicio)
+        if time.time() + max(espera, 0) + 60 > fin:
+            break
+        time.sleep(max(espera, 0))
 
 
 if __name__ == "__main__":
